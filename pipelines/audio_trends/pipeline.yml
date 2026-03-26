@@ -1,0 +1,11 @@
+# pipeline.yml — Pipeline definition
+# A pipeline groups related assets and can be scheduled.
+# All assets in this folder (and subfolders) belong to this pipeline.
+ 
+name: audio_trends
+schedule: "daily"
+ 
+# Default connection for all SQL assets in this pipeline
+default_connections:
+  google_cloud_platform: "bigquery"
+ 

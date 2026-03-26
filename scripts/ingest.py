@@ -36,6 +36,7 @@ TEMP_DIR = Path("./temp_data")  # local staging folder, gets cleaned up
 
 # Kaggle dataset identifiers — these are the "owner/dataset-name"
 # strings you see in the Kaggle URL
+# format below is "datasetkey": "kaggle_id"
 KAGGLE_DATASETS = {
     "spotify_charts": "asaniczka/top-spotify-songs-in-73-countries-daily-updated",
     "podcast_reviews": "thoughtvector/podcastreviews",
@@ -124,52 +125,78 @@ def process_spotify_charts(data_dir: Path) -> pd.DataFrame:
 def process_podcast_reviews(data_dir: Path) -> dict[str, pd.DataFrame]:
     """
     Read the Podcast Reviews dataset.
-
-    This comes as a SQLite database with two main tables:
-      - podcasts: podcast_id, title, url (and sometimes category info)
-      - reviews: podcast_id, author_id, rating, title, content, created_at
-
-    We return both tables as separate DataFrames since they'll
-    become separate staging models in Bruin.
-
+ 
+    This dataset contains JSON files:
+      - podcasts.json: podcast_id, title, url, etc.
+      - reviews.json: podcast_id, author_id, rating, title, content, created_at
+      - categories.json: category metadata for podcasts
+ 
+    We return podcasts and reviews as separate DataFrames since
+    they'll become separate staging models in Bruin.
+ 
     We filter reviews on created_at to keep only 2022-2025.
-    The podcasts table doesn't need date filtering — it's a
-    dimension table (reference data about each podcast).
     """
-    # Find the SQLite file
-    db_files = list(data_dir.glob("*.sqlite")) + list(data_dir.glob("*.db"))
-    if not db_files:
-        raise FileNotFoundError(f"No SQLite files found in {data_dir}")
-
-    print(f"  Reading SQLite database: {db_files[0].name}...")
-    conn = sqlite3.connect(db_files[0])
-
-    # First, let's see what tables exist
-    tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)
-    print(f"  Tables in database: {list(tables['name'])}")
-
-    # Read the podcasts (dimension) table — keep all rows
-    df_podcasts = pd.read_sql("SELECT * FROM podcasts", conn)
+    # Show what files we're working with
+    files = list(data_dir.iterdir())
+    print(f"  Available files: {[f.name for f in files]}")
+ 
+    # --- Read podcasts ---
+    podcasts_file = data_dir / "podcasts.json"
+    if not podcasts_file.exists():
+        raise FileNotFoundError(f"podcasts.json not found in {data_dir}")
+ 
+    # Podcast JSON files from Kaggle can be large — read line by line
+    # (JSON Lines format: one JSON object per line)
+    print(f"  Reading podcasts.json...")
+    try:
+        df_podcasts = pd.read_json(podcasts_file)
+    except ValueError:
+        # If standard JSON fails, try JSON Lines format
+        df_podcasts = pd.read_json(podcasts_file, lines=True)
+ 
     print(f"  Podcasts table: {df_podcasts.shape[0]:,} rows × {df_podcasts.shape[1]} columns")
     print(f"  Podcast columns: {list(df_podcasts.columns)}")
-
-    # Read and filter the reviews (fact) table
-    df_reviews = pd.read_sql("SELECT * FROM reviews", conn)
+ 
+    # --- Read categories (if present) and merge with podcasts ---
+    categories_file = data_dir / "categories.json"
+    if categories_file.exists():
+        print(f"  Reading categories.json...")
+        try:
+            df_categories = pd.read_json(categories_file)
+        except ValueError:
+            df_categories = pd.read_json(categories_file, lines=True)
+        print(f"  Categories table: {df_categories.shape[0]:,} rows × {df_categories.shape[1]} columns")
+        print(f"  Category columns: {list(df_categories.columns)}")
+ 
+        # If categories has a podcast_id, merge it with podcasts
+        if "podcast_id" in df_categories.columns and "podcast_id" in df_podcasts.columns:
+            df_podcasts = df_podcasts.merge(df_categories, on="podcast_id", how="left")
+            print(f"  Merged categories into podcasts: {df_podcasts.shape[0]:,} rows × {df_podcasts.shape[1]} columns")
+ 
+    # --- Read reviews ---
+    reviews_file = data_dir / "reviews.json"
+    if not reviews_file.exists():
+        raise FileNotFoundError(f"reviews.json not found in {data_dir}")
+ 
+    print(f"  Reading reviews.json (this may take a moment — large file)...")
+    try:
+        df_reviews = pd.read_json(reviews_file)
+    except ValueError:
+        df_reviews = pd.read_json(reviews_file, lines=True)
+ 
     print(f"  Reviews table (raw): {df_reviews.shape[0]:,} rows × {df_reviews.shape[1]} columns")
     print(f"  Review columns: {list(df_reviews.columns)}")
-
+ 
     # Parse date and filter
     df_reviews["created_at"] = pd.to_datetime(df_reviews["created_at"], errors="coerce")
     df_reviews = df_reviews.dropna(subset=["created_at"])
-
+ 
     before_count = len(df_reviews)
     df_reviews = df_reviews[
         (df_reviews["created_at"] >= START_DATE) & (df_reviews["created_at"] <= END_DATE)
     ]
     print(f"  Reviews filtered to {START_DATE} – {END_DATE}: {len(df_reviews):,} rows (dropped {before_count - len(df_reviews):,})")
-
-    conn.close()
-
+ 
     return {"podcasts": df_podcasts, "reviews": df_reviews}
 
 
@@ -190,6 +217,10 @@ def process_podcast_charts(data_dir: Path) -> pd.DataFrame:
 
     print(f"  Raw shape: {df.shape[0]:,} rows × {df.shape[1]} columns")
     print(f"  Columns: {list(df.columns)}")
+
+    # Replace dots in column names — BigQuery doesn't allow them
+    df.columns = df.columns.str.replace(".", "_", regex=False)
+    print(f"  Renamed columns: {list(df.columns)}")
 
     # Try to find and parse a date column
     # The exact column name may vary — we check common possibilities

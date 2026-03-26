@@ -225,3 +225,7 @@ __pycache__/
 .DS_Store
 
 temp_data/
+.bruin.yml
+logs/runs
+logs/*.log
+*.py[cod]
