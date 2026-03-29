@@ -4,6 +4,8 @@ Exploring content consumption patterns across music and podcasts on streaming pl
 
 Analyzing the audio ecosystem from three vantage points across 2022-2025. Podcast reviews capture historical listener sentiment (2022-2023), Spotify charts show music consumption trends (late 2023-2025), and podcast charts reveal spoken-word content trends (late 2024-2025). Where these datasets overlap, we can directly compare music and podcast consumption patterns and correlate music genres with podcast categories.
 
+This pipeline uses batch processing to ingest data from Kaggle, load it into a GCS data lake, and transform it through staging and mart layers in BigQuery using Bruin as the orchestrator. The pipeline is designed to run on a daily schedule.
+
 ## Architecture
 
 ```
